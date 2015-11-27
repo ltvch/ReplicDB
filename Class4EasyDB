@@ -1,0 +1,69 @@
+
+class fb:
+    "Для упрощения работы с FB"
+    def __init__(self, dbhost, dbfile, dbuser, dbpass):
+        self.con = kinterbasdb.connect(
+            host = dbhost, database = dbfile,
+            user = dbuser, password = dbpass, charset = 'WIN1251'
+        )
+ 
+    def selectSQL(self, query, params=([])):
+        "Select data from db"
+        customTPB = (kinterbasdb.isc_tpb_read_committed + kinterbasdb.isc_tpb_rec_version)
+        self.con.begin(tpb = customTPB)
+        cur = self.con.cursor()
+        cur.execute(query, params)
+        result = cur.fetchall()
+        cur.close()
+        self.con.commit()
+        return result
+ 
+    def selectBlobToFile(self, filename, query, params=([])):
+        customTPB = (kinterbasdb.isc_tpb_write + kinterbasdb.isc_tpb_read_committed + kinterbasdb.isc_tpb_rec_version)
+        self.con.begin(tpb = customTPB)
+        cur = self.con.cursor()
+        cur.set_type_trans_in ({'BLOB': {'mode': 'stream'}})
+        cur.set_type_trans_out({'BLOB': {'mode': 'stream'}})
+        try:
+            blobfile = open(filename, 'w')
+            cur.execute(query, params)
+            blobreader = cur.fetchone()[0]
+            for chunkNo, chunk in enumerate(blobreader.chunks(50)):
+                blobfile.write(chunk)
+        except kinterbasdb.ProgrammingError, (errNumb, errText):
+            cur.close()
+            self.con.rollback()
+            result = (errNumb, errText, query)
+        except:
+            cur.close()
+            self.con.rollback()
+            result = (-1, 'Unknown error', query)
+        else:
+            cur.close()
+            self.con.commit()
+            result = (0, 'Success', query)
+        finally:
+            return result
+ 
+    def execSQL(self, query, params=([])):
+        customTPB = (kinterbasdb.isc_tpb_write + kinterbasdb.isc_tpb_read_committed + kinterbasdb.isc_tpb_rec_version)
+        self.con.begin(tpb = customTPB)
+        cur = self.con.cursor()
+        cur.set_type_trans_in ({'BLOB': {'mode': 'stream'}})
+        cur.set_type_trans_out({'BLOB': {'mode': 'stream'}})
+        try:
+            cur.execute(query, params)
+        except kinterbasdb.ProgrammingError, (errNumb, errText):
+            cur.close()
+            self.con.rollback()
+            result = (errNumb, errText, query)
+        except:
+            cur.close()
+            self.con.rollback()
+            result = (-1, 'Unknown error', query)
+        else:
+            cur.close()
+            self.con.commit()
+            result = (0, 'Success', query)
+        finally:
+            return result
