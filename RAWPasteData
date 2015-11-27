@@ -1,0 +1,27 @@
+if __name__ == '__main__':
+    fbclient = fb('localhost', '/var/firebird/database.fdb', 'sysdba', 'masterkey')
+    session_id = fbclient.selectSQL("insert into rpl_sessions default values returning id")[0]
+    sender_id = fbclient.selectSQL("select id from rpl_databases where its_me = 1")[0][0]
+    fbclient.execSQL("update rpl_sessions set end_ts = current_timestamp where id = %d" % (session_id[0]-1))
+    rplfname = "replication_tmp.sql"
+    resfile = open(rplfname, 'w')
+    resfile.write("set echo on;\n");
+    resfile.write("select rdb$set_context('USER_SESSION','replicating_now','true') from rdb$database;\n")
+    for statement in fbclient.selectSQL("select rpl_sql from rpl_log where session_id = %d order by id" % (session_id[0]-1)):
+        resfile.write(statement[0].encode("cp1251") + '\n')
+    resfile.close()
+    srvparams = fbclient.selectSQL("select dbhost, dbpath, dbuser, dbpass from rpl_databases where its_server = 1")[0]
+    fbserver = fb(srvparams[0].encode("cp1251"), srvparams[1].encode("cp1251"), srvparams[2].encode("cp1251"), srvparams[3].encode("cp1251"))
+    resblob = file(os.path.abspath(rplfname), 'rb')
+    r = fbserver.execSQL("insert into rpl_blobs(sender_id, session_id, rpl_blob)values(?, ?, ?)", (sender_id, session_id[0]-1, resblob))
+    if r[0] == -1:
+        print r[1] + ' happened during ' + r[2]
+ 
+    for dbitem in fbclient.selectSQL("select id, last_session from rpl_databases d where d.its_me = 0"):
+        for rplitem in fbserver.selectSQL("select id,session_id from rpl_blobs where sender_id = ? and session_id > ?", (dbitem[0], dbitem[1])):
+            rplfilename = "replication_" + str(rplitem[1]) + ".sql"
+            fbserver.selectBlobToFile(rplfilename, "select rpl_blob from rpl_blobs where id = ?", ([rplitem[0]]))
+            isqlcmd = "isql-fb -user sysdba -password masterkey -input " + rplfilename + " /usr/database/dis.fdb > replication_" + str(rplitem[1]) + ".log 2>&1"
+            res = subprocess.call(isqlcmd, shell=True)
+            fbclient.execSQL("insert into rpl_received(db_id,blob_id,session_id,received_ts)values(?, ?, ?, current_timestamp)", (dbitem[0], rplitem[0], rplitem[1]))
+            fbclient.execSQL("update rpl_databases set last_session = ? where id = ?", (rplitem[1], dbitem[0]))
